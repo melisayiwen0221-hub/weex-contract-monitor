@@ -21,8 +21,37 @@ COINS = [
     "TRXUSDT", "UNIUSDT", "WLDUSDT"
 ]
 
-# 提醒設定（一鍵新增時自動計算）
-ALERTS_FILE = "/tmp/weex_alerts.json"  # Railway 用 /tmp
+# CoinGecko ID 對照表
+COINGECKO_IDS = {
+    "BTCUSDT": "bitcoin",
+    "ETHUSDT": "ethereum",
+    "ADAUSDT": "cardano",
+    "AVAXUSDT": "avalanche-2",
+    "AAVEUSDT": "aave",
+    "ARBUSDT": "arbitrum",
+    "APTUSDT": "aptos",
+    "DOTUSDT": "polkadot",
+    "FILUSDT": "filecoin",
+    "FETUSDT": "artificial-superintelligence-alliance",
+    "INJUSDT": "injective-protocol",
+    "LINKUSDT": "chainlink",
+    "LTCUSDT": "litecoin",
+    "MATICUSDT": "polygon",
+    "NEARUSDT": "near",
+    "OPUSDT": "optimism",
+    "RENDERUSDT": "render-token",
+    "SUIUSDT": "sui",
+    "SEIUSDT": "sei-network",
+    "STRKUSDT": "starknet",
+    "SHIBUSDT": "shiba-inu",
+    "TONUSDT": "the-open-network",
+    "TRXUSDT": "tron",
+    "UNIUSDT": "uniswap",
+    "WLDUSDT": "worldcoin-wld"
+}
+
+# 提醒設定
+ALERTS_FILE = "/tmp/weex_alerts.json"
 
 # ==================== 日誌 ====================
 logging.basicConfig(
@@ -53,9 +82,47 @@ async def send_telegram(message: str):
     except Exception as e:
         logger.error(f"Telegram 發送失敗: {e}")
 
-# ==================== 價格獲取 ====================
-async def fetch_prices(session: aiohttp.ClientSession) -> dict:
-    """從 Binance 合約 API 獲取所有幣種價格"""
+# ==================== 價格獲取（CoinGecko 為主 + Binance 備援）====================
+async def fetch_from_coingecko(session: aiohttp.ClientSession) -> dict:
+    """從 CoinGecko API 獲取價格"""
+    ids = ",".join(COINGECKO_IDS.values())
+    url = (
+        f"https://api.coingecko.com/api/v3/simple/price"
+        f"?ids={ids}"
+        f"&vs_currencies=usd"
+        f"&include_24hr_change=true"
+        f"&include_24hr_vol=true"
+    )
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                result = {}
+                for symbol, coin_id in COINGECKO_IDS.items():
+                    if coin_id in data:
+                        d = data[coin_id]
+                        result[symbol] = {
+                            "price": float(d.get("usd", 0)),
+                            "change24h": float(d.get("usd_24h_change", 0)),
+                            "volume": 0,
+                            "high": 0,
+                            "low": 0,
+                            "quoteVolume": float(d.get("usd_24h_vol", 0)),
+                        }
+                logger.info(f"CoinGecko 成功獲取 {len(result)} 個幣種價格")
+                return result
+            elif resp.status == 429:
+                logger.warning(f"CoinGecko rate limit (429)，嘗試 Binance 備援")
+                return {}
+            else:
+                logger.error(f"CoinGecko API 回傳狀態碼: {resp.status}")
+                return {}
+    except Exception as e:
+        logger.error(f"CoinGecko 請求失敗: {e}")
+        return {}
+
+async def fetch_from_binance(session: aiohttp.ClientSession) -> dict:
+    """從 Binance 合約 API 獲取價格（備援）"""
     url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -73,19 +140,36 @@ async def fetch_prices(session: aiohttp.ClientSession) -> dict:
                             "low": float(item.get("lowPrice", 0)),
                             "quoteVolume": float(item.get("quoteVolume", 0)),
                         }
+                logger.info(f"Binance 成功獲取 {len(result)} 個幣種價格")
                 return result
             else:
                 logger.error(f"Binance API 回傳狀態碼: {resp.status}")
                 return {}
     except Exception as e:
-        logger.error(f"獲取價格失敗: {e}")
+        logger.error(f"Binance 請求失敗: {e}")
         return {}
+
+async def fetch_prices(session: aiohttp.ClientSession) -> dict:
+    """獲取價格：CoinGecko 為主，失敗則用 Binance 備援"""
+    # 先試 CoinGecko
+    prices = await fetch_from_coingecko(session)
+    if prices:
+        return prices
+
+    # CoinGecko 失敗，試 Binance
+    logger.info("CoinGecko 未取得價格，切換至 Binance 備援")
+    prices = await fetch_from_binance(session)
+    if prices:
+        return prices
+
+    logger.error("CoinGecko 與 Binance 皆無法獲取價格")
+    return {}
 
 # ==================== 莊家指數計算 ====================
 def calculate_whale_index(price: float, volume: float, change24h: float, quote_volume: float) -> dict:
     """計算莊家指數和信號"""
     # 成交量分數 (0-40)
-    volume_score = min(quote_volume / 50000000, 1) * 40  # 50M USDT 為滿分
+    volume_score = min(quote_volume / 50000000, 1) * 40
 
     # 波動分數 (0-30)
     volatility = abs(change24h)
@@ -112,7 +196,7 @@ class AlertManager:
     def __init__(self):
         self.alerts = self.load_alerts()
         self.triggered = set()
-        self.price_history = {}  # 記錄上次價格和指數
+        self.price_history = {}
 
     def load_alerts(self) -> list:
         if os.path.exists(ALERTS_FILE):
@@ -143,16 +227,12 @@ class AlertManager:
 
     def add_all_alerts(self, symbol: str, base_price: float, note: str = ""):
         """一鍵新增多空全套提醒（6種）"""
-
-        # === 多單提醒 ===
-        long_entry = round(base_price * 0.985, 6)      # 多單入場 -1.5%
-        long_tp = round(base_price * 1.10, 6)           # 多單止盈 +10%
-        long_sl = round(base_price * 0.92, 6)           # 多單止損 -8%
-
-        # === 空單提醒 ===
-        short_entry = round(base_price * 1.015, 6)     # 空單入場 +1.5%（反彈做空）
-        short_tp = round(base_price * 0.90, 6)          # 空單止盈 -10%（下跌獲利）
-        short_sl = round(base_price * 1.08, 6)          # 空單止損 +8%（上漲停損）
+        long_entry = round(base_price * 0.985, 6)
+        long_tp = round(base_price * 1.10, 6)
+        long_sl = round(base_price * 0.92, 6)
+        short_entry = round(base_price * 1.015, 6)
+        short_tp = round(base_price * 0.90, 6)
+        short_sl = round(base_price * 1.08, 6)
 
         added = []
         alert_configs = [
@@ -173,11 +253,10 @@ class AlertManager:
         return added
 
     def check_alerts(self, symbol: str, price: float, data: dict) -> list:
-        """檢查並觸發提醒（支援多空雙向）"""
+        """檢查並觸發提醒"""
         triggered = []
         whale = calculate_whale_index(price, data.get("volume", 0), data.get("change24h", 0), data.get("quoteVolume", 0))
 
-        # 更新歷史
         prev = self.price_history.get(symbol, {})
         self.price_history[symbol] = {
             "price": price,
@@ -194,43 +273,28 @@ class AlertManager:
             alert_type = alert["type"]
             target_price = alert["price"]
 
-            # === 多單提醒 ===
             if alert_type == "entry":
-                # 多單入場：價格回調 <= 目標價 且 信號為買入
                 if whale["signal"] == "買入" and price <= target_price * 1.005:
                     should_trigger = True
-
             elif alert_type == "tp":
-                # 多單止盈：價格上漲 >= 目標價
                 if price >= target_price:
                     should_trigger = True
-
             elif alert_type == "sl":
-                # 多單止損：價格下跌 <= 目標價
                 if price <= target_price:
                     should_trigger = True
-                # 莊家出貨預警
                 prev_index = prev.get("index")
                 if prev_index and prev_index >= 40 and whale["index"] < 25:
                     should_trigger = True
                     alert["note"] = (alert.get("note", "") + " | 莊家出貨預警").strip(" |")
-
-            # === 空單提醒 ===
             elif alert_type == "short_entry":
-                # 空單入場：價格反彈 >= 目標價 且 信號為賣出
                 if whale["signal"] == "賣出" and price >= target_price * 0.995:
                     should_trigger = True
-
             elif alert_type == "short_tp":
-                # 空單止盈：價格下跌 <= 目標價
                 if price <= target_price:
                     should_trigger = True
-
             elif alert_type == "short_sl":
-                # 空單止損：價格上漲 >= 目標價
                 if price >= target_price:
                     should_trigger = True
-                # 莊家拉盤預警（空單視角：指數驟升可能回調）
                 prev_index = prev.get("index")
                 if prev_index and prev_index <= 30 and whale["index"] > 70:
                     should_trigger = True
@@ -259,7 +323,6 @@ async def main():
     logger.info(f"Telegram: {'已設定' if bot else '未設定'}")
     logger.info("=" * 50)
 
-    # 啟動通知
     if bot:
         await send_telegram(
             f"🚀 <b>WEEX 合約監控已啟動</b>\n"
@@ -272,7 +335,6 @@ async def main():
             try:
                 start_time = time.time()
 
-                # 獲取價格
                 prices = await fetch_prices(session)
 
                 if not prices:
@@ -280,7 +342,6 @@ async def main():
                     await asyncio.sleep(UPDATE_INTERVAL)
                     continue
 
-                # 檢查提醒
                 messages = []
                 for symbol, data in prices.items():
                     price = data["price"]
@@ -304,11 +365,9 @@ async def main():
                         messages.append(msg)
                         logger.info(f"觸發提醒: {symbol} {name} @ {price}")
 
-                # 發送 Telegram 通知
                 for msg in messages:
                     await send_telegram(msg)
 
-                # 計算下次更新時間
                 elapsed = time.time() - start_time
                 sleep_time = max(1, UPDATE_INTERVAL - elapsed)
                 logger.info(f"輪詢完成，{len(prices)} 個幣種，耗時 {elapsed:.2f}s，下次更新 {sleep_time:.0f}s 後")
@@ -318,14 +377,13 @@ async def main():
                 logger.error(f"主循環錯誤: {e}")
                 await asyncio.sleep(UPDATE_INTERVAL)
 
-# ==================== HTTP 伺服器（給 UptimeRobot ping）====================
+# ==================== HTTP 伺服器 ====================
 from aiohttp import web
 
 async def health_check(request):
     return web.Response(text="OK", status=200)
 
 async def get_status(request):
-    """查詢當前狀態"""
     return web.json_response({
         "status": "running",
         "coins_monitored": len(COINS),
@@ -335,7 +393,6 @@ async def get_status(request):
     })
 
 async def add_alert_api(request):
-    """API 新增提醒"""
     try:
         data = await request.json()
         symbol = data.get("symbol", "").upper() + "USDT"
@@ -375,10 +432,7 @@ async def start_web_server():
 
 # ==================== 啟動 ====================
 async def run():
-    # 啟動 HTTP 伺服器（給 UptimeRobot ping 用）
     runner = await start_web_server()
-
-    # 啟動監控主循環
     await main()
 
 if __name__ == "__main__":
