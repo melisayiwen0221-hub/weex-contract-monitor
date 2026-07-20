@@ -18,7 +18,12 @@ COINS = [
     "DOTUSDT", "FILUSDT", "FETUSDT", "INJUSDT", "LINKUSDT",
     "LTCUSDT", "MATICUSDT", "NEARUSDT", "OPUSDT", "RENDERUSDT",
     "SUIUSDT", "SEIUSDT", "STRKUSDT", "SHIBUSDT", "TONUSDT",
-    "TRXUSDT", "UNIUSDT", "WLDUSDT"
+    "TRXUSDT", "UNIUSDT", "WLDUSDT",
+    "XRPUSDT", "DOGEUSDT", "SOLUSDT", "BNBUSDT", "PEPEUSDT",
+    "JTOUSDT", "ACEUSDT", "BIGTIMEUSDT", "BOMEUSDT", "WIFUSDT",
+    "FLOKIUSDT", "BONKUSDT", "JUPUSDT", "PYTHUSDT", "IMXUSDT",
+    "GRTUSDT", "LDOUSDT", "TIAUSDT", "SAGAUSDT", "ENAUSDT",
+    "WUSDT"
 ]
 
 # CoinGecko ID 對照表
@@ -47,7 +52,28 @@ COINGECKO_IDS = {
     "TONUSDT": "the-open-network",
     "TRXUSDT": "tron",
     "UNIUSDT": "uniswap",
-    "WLDUSDT": "worldcoin-wld"
+    "WLDUSDT": "worldcoin-wld",
+    "XRPUSDT": "ripple",
+    "DOGEUSDT": "dogecoin",
+    "SOLUSDT": "solana",
+    "BNBUSDT": "binancecoin",
+    "PEPEUSDT": "pepe",
+    "JTOUSDT": "jito-governance-token",
+    "ACEUSDT": "fusionist",
+    "BIGTIMEUSDT": "big-time",
+    "BOMEUSDT": "book-of-meme",
+    "WIFUSDT": "dogwifhat",
+    "FLOKIUSDT": "floki",
+    "BONKUSDT": "bonk",
+    "JUPUSDT": "jupiter-exchange",
+    "PYTHUSDT": "pyth-network",
+    "IMXUSDT": "immutable-x",
+    "GRTUSDT": "the-graph",
+    "LDOUSDT": "lido-dao",
+    "TIAUSDT": "celestia",
+    "SAGAUSDT": "saga",
+    "ENAUSDT": "ethena",
+    "WUSDT": "wormhole"
 }
 
 # 提醒設定
